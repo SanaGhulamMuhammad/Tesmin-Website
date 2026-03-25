@@ -1304,6 +1304,34 @@ body {
    16. FAQ PAGE
    ========================================================== */
 
+.faq-page {
+    background: #000000;
+    color: #FFFFFF;
+}
+
+.faq-page .faq-intro h2,
+.faq-page .faq-question {
+    color: #FFFFFF;
+}
+
+.faq-page .faq-intro p,
+.faq-page .faq-answer {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.faq-page .faq-item {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.faq-page .faq-item:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.faq-page .faq-answer {
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
 .faq-intro {
     text-align: center;
     margin-bottom: 80px;
