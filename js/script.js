@@ -244,50 +244,42 @@ sections.forEach(section => {
 
 
 /* ==========================================================
-   6. GALLERY DRAG-TO-SCROLL
-   Enables mouse drag scrolling on the gallery strip.
+   6. GALLERY AUTO-LOOP MARQUEE
+   Automatically scrolls the gallery continuously.
    ========================================================== */
 
 (function () {
-    function initGalleryDrag() {
-        const gallery = document.querySelector('.gallery');
-        if (!gallery) return;
+    function initGalleryLoop() {
+        const galleries = document.querySelectorAll('.gallery');
+        galleries.forEach(gallery => {
+            if (gallery.querySelector('.gallery-track')) return; // Already initialized
+            
+            const originalItems = Array.from(gallery.children);
+            if (originalItems.length === 0) return;
 
-        let isDown = false;
-        let startX;
-        let scrollLeft;
+            // Create the track element that will animate
+            const track = document.createElement('div');
+            track.className = 'gallery-track';
 
-        gallery.addEventListener('mousedown', (e) => {
-            isDown = true;
-            gallery.classList.add('active');
-            startX = e.pageX - gallery.offsetLeft;
-            scrollLeft = gallery.scrollLeft;
-        });
+            // Append all original items to the track
+            originalItems.forEach(item => track.appendChild(item));
 
-        gallery.addEventListener('mouseleave', () => {
-            isDown = false;
-            gallery.classList.remove('active');
-        });
+            // Clone and append items for a seamless loop
+            originalItems.forEach(item => {
+                const clone = item.cloneNode(true);
+                track.appendChild(clone);
+            });
 
-        gallery.addEventListener('mouseup', () => {
-            isDown = false;
-            gallery.classList.remove('active');
-        });
-
-        gallery.addEventListener('mousemove', (e) => {
-            if (!isDown) return;
-            e.preventDefault();
-            const x = e.pageX - gallery.offsetLeft;
-            const walk = (x - startX) * 2; // Scroll speed multiplier
-            gallery.scrollLeft = scrollLeft - walk;
+            // Put the track back into the gallery wrapper
+            gallery.appendChild(track);
         });
     }
 
     /* Initialise after components are loaded */
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initGalleryDrag);
+        document.addEventListener('DOMContentLoaded', initGalleryLoop);
     } else {
-        initGalleryDrag();
+        initGalleryLoop();
     }
 })();
 
