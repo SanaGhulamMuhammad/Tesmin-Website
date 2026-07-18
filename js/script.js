@@ -395,6 +395,106 @@ function getPdfMetaByType(pdfType) {
     return null;
 }
 
+let stripeInstance = null;
+let stripeElements = null;
+let stripeCardNumber = null;
+let stripeCardExpiry = null;
+let stripeCardCvc = null;
+let paidDownloadUrl = '';
+let paidDownloadName = 'course.pdf';
+let subscriptionCardNumber = null;
+let subscriptionCardExpiry = null;
+let subscriptionCardCvc = null;
+
+const subscriptionPlanMeta = {
+    core: {
+        title: 'MIM Core Support',
+        tagline: 'Consistent midwife support throughout pregnancy',
+        price: '\u00a379.99/month',
+        imagePath: '../images/offer1.png'
+    },
+    signature: {
+        title: 'MIM Signature Support',
+        tagline: 'Enhanced support with extended midwife access',
+        price: '\u00a3149.99/month',
+        imagePath: '../images/signature-support.jpeg'
+    },
+    sustained: {
+        title: 'MIM Sustained Support',
+        tagline: 'Complete continuity of care in one package',
+        price: '\u00a31,399 one payment',
+        imagePath: '../images/offer3.png'
+    }
+};
+
+async function initializeStripePaymentFields() {
+    if (!document.getElementById('payCardNumber') || typeof Stripe === 'undefined') return;
+    if (stripeInstance && stripeElements && stripeCardNumber && stripeCardExpiry && stripeCardCvc) return;
+
+    const response = await fetch('/api/stripe-config');
+    const config = await response.json();
+    if (!response.ok) throw new Error(config.error || 'Stripe is not configured.');
+
+    stripeInstance = Stripe(config.publishableKey);
+    stripeElements = stripeInstance.elements();
+
+    const fieldStyle = {
+        base: {
+            color: '#111111',
+            fontFamily: '"Albert Sans", sans-serif',
+            fontSize: '15px',
+            '::placeholder': {
+                color: '#8a8a8a'
+            }
+        },
+        invalid: {
+            color: '#b00020'
+        }
+    };
+
+    stripeCardNumber = stripeElements.create('cardNumber', { style: fieldStyle, placeholder: '1234 5678 9012 3456' });
+    stripeCardExpiry = stripeElements.create('cardExpiry', { style: fieldStyle, placeholder: 'MM/YY' });
+    stripeCardCvc = stripeElements.create('cardCvc', { style: fieldStyle, placeholder: '123' });
+
+    stripeCardNumber.mount('#payCardNumber');
+    stripeCardExpiry.mount('#payExpiry');
+    stripeCardCvc.mount('#payCvc');
+}
+
+async function initializeSubscriptionPaymentFields() {
+    if (!document.getElementById('subCardNumber') || typeof Stripe === 'undefined') return;
+    if (stripeInstance && subscriptionCardNumber && subscriptionCardExpiry && subscriptionCardCvc) return;
+
+    const response = await fetch('/api/stripe-config');
+    const config = await response.json();
+    if (!response.ok) throw new Error(config.error || 'Stripe is not configured.');
+
+    stripeInstance = stripeInstance || Stripe(config.publishableKey);
+    stripeElements = stripeElements || stripeInstance.elements();
+
+    const fieldStyle = {
+        base: {
+            color: '#111111',
+            fontFamily: '"Albert Sans", sans-serif',
+            fontSize: '15px',
+            '::placeholder': {
+                color: '#8a8a8a'
+            }
+        },
+        invalid: {
+            color: '#b00020'
+        }
+    };
+
+    subscriptionCardNumber = stripeElements.create('cardNumber', { style: fieldStyle, placeholder: '1234 5678 9012 3456' });
+    subscriptionCardExpiry = stripeElements.create('cardExpiry', { style: fieldStyle, placeholder: 'MM/YY' });
+    subscriptionCardCvc = stripeElements.create('cardCvc', { style: fieldStyle, placeholder: '123' });
+
+    subscriptionCardNumber.mount('#subCardNumber');
+    subscriptionCardExpiry.mount('#subExpiry');
+    subscriptionCardCvc.mount('#subCvc');
+}
+
 function openPaymentModal(pdfMeta) {
     const modalOverlay = document.getElementById('paymentModal');
     const subtitleEl = document.getElementById('paymentSubtitle');
@@ -435,6 +535,10 @@ function openPaymentModal(pdfMeta) {
 
     const firstNameEl = document.getElementById('payFirstName');
     if (firstNameEl) firstNameEl.focus();
+
+    initializeStripePaymentFields().catch(error => {
+        if (errorEl) errorEl.textContent = error.message || 'Stripe is not available right now.';
+    });
 }
 
 function closePaymentModal() {
@@ -453,26 +557,129 @@ function setPaymentSubmitting(isSubmitting) {
     submitBtn.style.cursor = isSubmitting ? 'not-allowed' : 'pointer';
 }
 
+function showPaymentResultModal(isSuccess, message, downloadUrl, downloadName) {
+    const modalOverlay = document.getElementById('paymentResultModal');
+    const titleEl = document.getElementById('paymentResultTitle');
+    const messageEl = document.getElementById('paymentResultMessage');
+    const downloadBtn = document.getElementById('downloadPaidPdfBtn');
+
+    if (!modalOverlay) return;
+
+    if (titleEl) titleEl.textContent = isSuccess ? 'Payment Successful' : 'Payment Failed';
+    if (messageEl) messageEl.textContent = message;
+    if (downloadBtn) {
+        downloadBtn.href = downloadUrl || '#';
+        downloadBtn.style.display = isSuccess ? 'inline-flex' : 'none';
+    }
+
+    paidDownloadUrl = isSuccess && downloadUrl ? downloadUrl : '';
+    paidDownloadName = isSuccess && downloadName ? downloadName : 'course.pdf';
+    modalOverlay.classList.add('open');
+    modalOverlay.setAttribute('aria-hidden', 'false');
+}
+
+function closePaymentResultModal() {
+    const modalOverlay = document.getElementById('paymentResultModal');
+    if (!modalOverlay) return;
+    modalOverlay.classList.remove('open');
+    modalOverlay.setAttribute('aria-hidden', 'true');
+}
+
 function validatePaymentForm() {
     const firstName = document.getElementById('payFirstName');
     const lastName = document.getElementById('payLastName');
     const address = document.getElementById('payAddress');
-    const cardNumber = document.getElementById('payCardNumber');
-    const expiry = document.getElementById('payExpiry');
-    const cvc = document.getElementById('payCvc');
+    const email = document.getElementById('payEmail');
 
-    const fields = [firstName, lastName, address, cardNumber, expiry, cvc];
+    const fields = [firstName, lastName, address, email];
     const missing = fields.some(el => !el || !String(el.value || '').trim());
     if (missing) return 'Please fill in all fields.';
+    if (email && !email.checkValidity()) return 'Please enter a valid email address.';
 
-    const digits = String(cardNumber.value).replace(/\D/g, '');
-    if (digits.length < 12) return 'Please enter a valid card number.';
+    if (!stripeInstance || !stripeCardNumber) return 'Card payment is not ready yet. Please try again.';
 
-    const exp = String(expiry.value).trim();
-    if (!/^\d{2}\/\d{2}$/.test(exp)) return 'Expiry must be in MM/YY format.';
+    return null;
+}
 
-    const cvcDigits = String(cvc.value).replace(/\D/g, '');
-    if (cvcDigits.length < 3) return 'Please enter a valid CVC.';
+function openSubscriptionPaymentModal(planId) {
+    const modalOverlay = document.getElementById('subscriptionPaymentModal');
+    const plan = subscriptionPlanMeta[planId];
+    if (!modalOverlay || !plan) return;
+
+    modalOverlay.classList.add('open');
+    modalOverlay.setAttribute('aria-hidden', 'false');
+    modalOverlay.dataset.planId = planId;
+
+    const titleEl = document.getElementById('subscriptionPaymentTitle');
+    const subtitleEl = document.getElementById('subscriptionPaymentSubtitle');
+    const imageEl = document.getElementById('subscriptionPlanImage');
+    const planTitleEl = document.getElementById('subscriptionPlanTitle');
+    const planTaglineEl = document.getElementById('subscriptionPlanTagline');
+    const planPriceEl = document.getElementById('subscriptionPlanPrice');
+    const errorEl = document.getElementById('subscriptionPaymentError');
+
+    if (titleEl) titleEl.textContent = plan.title;
+    if (subtitleEl) subtitleEl.textContent = 'Enter your details and pay securely by card.';
+    if (imageEl) {
+        imageEl.src = plan.imagePath;
+        imageEl.alt = plan.title;
+    }
+    if (planTitleEl) planTitleEl.textContent = plan.title;
+    if (planTaglineEl) planTaglineEl.textContent = plan.tagline;
+    if (planPriceEl) planPriceEl.textContent = plan.price;
+    if (errorEl) errorEl.textContent = '';
+
+    const firstNameEl = document.getElementById('subFirstName');
+    if (firstNameEl) firstNameEl.focus();
+
+    initializeSubscriptionPaymentFields().catch(error => {
+        if (errorEl) errorEl.textContent = error.message || 'Stripe is not available right now.';
+    });
+}
+
+function closeSubscriptionPaymentModal() {
+    const modalOverlay = document.getElementById('subscriptionPaymentModal');
+    if (!modalOverlay) return;
+    modalOverlay.classList.remove('open');
+    modalOverlay.setAttribute('aria-hidden', 'true');
+    delete modalOverlay.dataset.planId;
+}
+
+function setSubscriptionSubmitting(isSubmitting) {
+    const submitBtn = document.getElementById('subscriptionPaySubmitBtn');
+    if (!submitBtn) return;
+    submitBtn.disabled = isSubmitting;
+    submitBtn.style.opacity = isSubmitting ? '0.75' : '1';
+    submitBtn.style.cursor = isSubmitting ? 'not-allowed' : 'pointer';
+}
+
+function showSubscriptionResultModal(isSuccess, message) {
+    const modalOverlay = document.getElementById('subscriptionResultModal');
+    const titleEl = document.getElementById('subscriptionResultTitle');
+    const messageEl = document.getElementById('subscriptionResultMessage');
+    if (!modalOverlay) return;
+
+    if (titleEl) titleEl.textContent = isSuccess ? 'Payment Successful' : 'Payment Failed';
+    if (messageEl) messageEl.textContent = message;
+    modalOverlay.classList.add('open');
+    modalOverlay.setAttribute('aria-hidden', 'false');
+}
+
+function closeSubscriptionResultModal() {
+    const modalOverlay = document.getElementById('subscriptionResultModal');
+    if (!modalOverlay) return;
+    modalOverlay.classList.remove('open');
+    modalOverlay.setAttribute('aria-hidden', 'true');
+}
+
+function validateSubscriptionPaymentForm() {
+    const fields = ['subFirstName', 'subLastName', 'subEmail', 'subAddress'].map(id => document.getElementById(id));
+    const missing = fields.some(el => !el || !String(el.value || '').trim());
+    if (missing) return 'Please fill in all required fields.';
+
+    const email = document.getElementById('subEmail');
+    if (email && !email.checkValidity()) return 'Please enter a valid email address.';
+    if (!stripeInstance || !subscriptionCardNumber) return 'Card payment is not ready yet. Please try again.';
 
     return null;
 }
@@ -515,7 +722,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const errorEl = document.getElementById('paymentError');
 
         if (form) {
-            form.addEventListener('submit', function (e) {
+            form.addEventListener('submit', async function (e) {
                 e.preventDefault();
                 if (errorEl) errorEl.textContent = '';
 
@@ -530,11 +737,274 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!pdfMeta) return;
 
                 setPaymentSubmitting(true);
-                setTimeout(() => {
-                    window.location.href = `download.html?pdf=${encodeURIComponent(pdfMeta.pdfType)}`;
-                }, 800);
+                try {
+                    const customer = {
+                        firstName: document.getElementById('payFirstName').value.trim(),
+                        lastName: document.getElementById('payLastName').value.trim(),
+                        address: document.getElementById('payAddress').value.trim(),
+                        email: document.getElementById('payEmail').value.trim()
+                    };
+
+                    const intentResponse = await fetch('/api/create-payment-intent', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ courseId: pdfMeta.pdfType, customer })
+                    });
+                    const intentData = await intentResponse.json();
+                    if (!intentResponse.ok) throw new Error(intentData.error || 'Unable to start payment.');
+
+                    const result = await stripeInstance.confirmCardPayment(intentData.clientSecret, {
+                        payment_method: {
+                            card: stripeCardNumber,
+                            billing_details: {
+                                name: `${customer.firstName} ${customer.lastName}`,
+                                email: customer.email,
+                                address: {
+                                    line1: customer.address
+                                }
+                            }
+                        }
+                    });
+
+                    if (result.error) throw new Error(result.error.message || 'Payment failed.');
+                    if (!result.paymentIntent || result.paymentIntent.status !== 'succeeded') {
+                        throw new Error('Payment was not successful.');
+                    }
+
+                    const tokenResponse = await fetch('/api/create-download-token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ paymentIntentId: result.paymentIntent.id })
+                    });
+                    const tokenData = await tokenResponse.json();
+                    if (!tokenResponse.ok) throw new Error(tokenData.error || 'Unable to prepare the download.');
+
+                    closePaymentModal();
+                    showPaymentResultModal(true, 'Your payment was successful. Your PDF is ready to download, and a confirmation email will be sent shortly.', tokenData.downloadUrl, tokenData.downloadName || pdfMeta.downloadName);
+                    form.reset();
+                    if (stripeCardNumber) stripeCardNumber.clear();
+                    if (stripeCardExpiry) stripeCardExpiry.clear();
+                    if (stripeCardCvc) stripeCardCvc.clear();
+                } catch (error) {
+                    showPaymentResultModal(false, error.message || 'Payment failed. Please try again.');
+                } finally {
+                    setPaymentSubmitting(false);
+                }
             });
         }
+    }
+
+    const resultModal = document.getElementById('paymentResultModal');
+    if (resultModal) {
+        const closeBtn = resultModal.querySelector('.payment-close');
+        if (closeBtn) closeBtn.addEventListener('click', closePaymentResultModal);
+
+        resultModal.addEventListener('click', function (e) {
+            if (e.target === resultModal) closePaymentResultModal();
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && resultModal.classList.contains('open')) closePaymentResultModal();
+        });
+    }
+
+    const downloadBtn = document.getElementById('downloadPaidPdfBtn');
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', async function (e) {
+            e.preventDefault();
+            if (!paidDownloadUrl) {
+                return;
+            }
+
+            const originalText = downloadBtn.innerHTML;
+            downloadBtn.style.pointerEvents = 'none';
+            downloadBtn.style.opacity = '0.75';
+            downloadBtn.innerHTML = 'Preparing... <i class="fas fa-download"></i>';
+
+            try {
+                const response = await fetch(paidDownloadUrl);
+                if (!response.ok) throw new Error('Download link is invalid or expired.');
+
+                const blob = await response.blob();
+                const blobUrl = window.URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = paidDownloadName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(blobUrl);
+            } catch (error) {
+                showPaymentResultModal(false, error.message || 'Unable to download the PDF. Please try again.');
+            } finally {
+                downloadBtn.innerHTML = originalText;
+                downloadBtn.style.pointerEvents = '';
+                downloadBtn.style.opacity = '';
+            }
+        });
+    }
+});
+
+document.addEventListener('DOMContentLoaded', function () {
+    const contactForm = document.getElementById('contactRequestForm');
+    if (contactForm) {
+        const statusEl = document.getElementById('contactFormStatus');
+        const submitBtn = contactForm.querySelector('button[type="submit"]');
+
+        contactForm.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            if (statusEl) {
+                statusEl.textContent = '';
+                statusEl.classList.remove('is-success', 'is-error');
+            }
+
+            const payload = Object.fromEntries(new FormData(contactForm).entries());
+            payload.consent = Boolean(contactForm.querySelector('input[name="consent"]:checked'));
+
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.style.opacity = '0.75';
+            }
+
+            try {
+                const response = await fetch('/api/contact-request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Unable to submit your request.');
+
+                contactForm.reset();
+                if (statusEl) {
+                    statusEl.textContent = data.message || 'Thank you. Your request has been received.';
+                    statusEl.classList.add('is-success');
+                }
+            } catch (error) {
+                if (statusEl) {
+                    statusEl.textContent = error.message || 'Unable to submit your request. Please try again.';
+                    statusEl.classList.add('is-error');
+                }
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.style.opacity = '';
+                }
+            }
+        });
+    }
+
+    const subscriptionButtons = document.querySelectorAll('.subscription-pay-btn[data-plan]');
+    subscriptionButtons.forEach(btn => {
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            openSubscriptionPaymentModal(this.getAttribute('data-plan'));
+        });
+    });
+
+    const subscriptionModal = document.getElementById('subscriptionPaymentModal');
+    if (subscriptionModal) {
+        const closeBtn = subscriptionModal.querySelector('.payment-close');
+        if (closeBtn) closeBtn.addEventListener('click', closeSubscriptionPaymentModal);
+
+        subscriptionModal.addEventListener('click', function (e) {
+            if (e.target === subscriptionModal) closeSubscriptionPaymentModal();
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && subscriptionModal.classList.contains('open')) closeSubscriptionPaymentModal();
+        });
+    }
+
+    const subscriptionForm = document.getElementById('subscriptionPaymentForm');
+    if (subscriptionForm) {
+        const errorEl = document.getElementById('subscriptionPaymentError');
+
+        subscriptionForm.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            if (errorEl) errorEl.textContent = '';
+
+            const validationError = validateSubscriptionPaymentForm();
+            if (validationError) {
+                if (errorEl) errorEl.textContent = validationError;
+                return;
+            }
+
+            const planId = document.getElementById('subscriptionPaymentModal').dataset.planId;
+            const customer = {
+                firstName: document.getElementById('subFirstName').value.trim(),
+                lastName: document.getElementById('subLastName').value.trim(),
+                email: document.getElementById('subEmail').value.trim(),
+                phone: document.getElementById('subPhone').value.trim(),
+                address: document.getElementById('subAddress').value.trim()
+            };
+
+            setSubscriptionSubmitting(true);
+            try {
+                const response = await fetch('/api/create-subscription-payment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ planId, customer })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Unable to start payment.');
+
+                const result = await stripeInstance.confirmCardPayment(data.clientSecret, {
+                    payment_method: {
+                        card: subscriptionCardNumber,
+                        billing_details: {
+                            name: `${customer.firstName} ${customer.lastName}`,
+                            email: customer.email,
+                            phone: customer.phone || undefined,
+                            address: {
+                                line1: customer.address
+                            }
+                        }
+                    }
+                });
+
+                if (result.error) throw new Error(result.error.message || 'Payment failed.');
+                if (!result.paymentIntent || result.paymentIntent.status !== 'succeeded') {
+                    throw new Error('Payment was not successful.');
+                }
+
+                const emailResponse = await fetch('/api/confirm-customer-event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        paymentIntentId: data.paymentIntentId || result.paymentIntent.id,
+                        subscriptionId: data.subscriptionId
+                    })
+                });
+                const emailData = await emailResponse.json();
+                if (!emailResponse.ok) throw new Error(emailData.error || 'Payment succeeded, but the confirmation email could not be triggered.');
+
+                closeSubscriptionPaymentModal();
+                showSubscriptionResultModal(true, 'Your payment was successful. You will receive a confirmation email shortly.');
+                subscriptionForm.reset();
+                if (subscriptionCardNumber) subscriptionCardNumber.clear();
+                if (subscriptionCardExpiry) subscriptionCardExpiry.clear();
+                if (subscriptionCardCvc) subscriptionCardCvc.clear();
+            } catch (error) {
+                showSubscriptionResultModal(false, error.message || 'Payment failed. Please try again.');
+            } finally {
+                setSubscriptionSubmitting(false);
+            }
+        });
+    }
+
+    const subscriptionResultModal = document.getElementById('subscriptionResultModal');
+    if (subscriptionResultModal) {
+        const closeBtn = subscriptionResultModal.querySelector('.payment-close');
+        if (closeBtn) closeBtn.addEventListener('click', closeSubscriptionResultModal);
+
+        subscriptionResultModal.addEventListener('click', function (e) {
+            if (e.target === subscriptionResultModal) closeSubscriptionResultModal();
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && subscriptionResultModal.classList.contains('open')) closeSubscriptionResultModal();
+        });
     }
 });
 /* ==========================================================
